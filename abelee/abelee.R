@@ -1,9 +1,11 @@
 library(dplyr)
 library(readr)
+library(zoo)
+library(locpol)
 
 # Read in data ----
 sec <- read_delim("abelee_data/prices_secondary.csv", delim = " ")
-pri <- read_delim("abelee_data/prices_secondary.csv", delim = " ")
+pri <- read_delim("abelee_data/prices_primary.csv", delim = " ")
 
 # functions ----
 add_mid_price <- function(df) {
@@ -30,20 +32,68 @@ time_diff <- function(df) {
   df <- df %>% mutate(time_diff = c(NA, diff(df$timestamp)))
 }
 
+stable_time <- function(df) {
+  # Transforms from nanosecounds to milliseconds
+  df$timestamp <- (df$timestamp-df$timestamp[1])/1e6
+  return(df)
+}
+
 # Initial inspection ----
 plot_bid_offer(sec)
 plot_bid_offer(pri)
 
 # Run ----
 sec <- add_mid_price(sec)
-sec <- time_diff(sec)
 pri <- add_mid_price(pri)
+
+sec <- stable_time(sec)
+pri <- stable_time(pri)
+
+sec <- time_diff(sec)
 pri <- time_diff(pri)
+
 t2 <- add_log_return(sec)
 t <- add_log_return(sec[seq(1, 200,1),])
 
 t <- t %>% mutate(log_return = NA)
 # Testing ----
+plot_price_avg_time <- function(df, window_size = 50) {
+  rolling_avg_timestamps <- df$timestamp[window_size:length(df$timestamp)]
+  rolling_avg <- rollapply(df$time_diff, width = window_size, FUN = mean, align = "right")
+  par(mar = c(5, 4, 4, 5))
+  plot(df$timestamp, df$mid_price, type = "l")
+  par(new = TRUE)
+  plot(rolling_avg_timestamps, rolling_avg, type = "l", axes = FALSE, bty = "n", xlab = "", ylab = "", col = "red")
+  axis(side=4, col = "red", col.axis="red")
+  mtext("Time difference (rolling average)", side=4, line=3, col = "red")
+}
+plot_price_avg_time(pri)
+plot_price_avg_time(sec)
+test_data <- pri[1:100,]
+test_data$timestamp <- (test_data$timestamp-test_data$timestamp[1])/1e6
+t <- locpol(mid_price ~ timestamp, data = as.data.frame(pri[1:100,]), deg = 1, bw = NULL)
+theta <- .9999
+lm_1 <- lm(mid_price ~ timestamp, data = test_data, weights = theta^(test_data$timestamp[nrow(test_data)]-test_data$timestamp))
+test$timestamp[1:100]
+
+df_lagged <- pri %>%
+  mutate(lag1 = lag(mid_price, 1),
+         lag2 = lag(mid_price, 2),
+         lag3 = lag(mid_price, 3),
+         lag4 = lag(mid_price, 4),
+         lag5 = lag(mid_price, 5),
+         lag6 = lag(mid_price, 6),
+         lag7 = lag(mid_price, 7),
+         lag8 = lag(mid_price, 8),
+         lag9 = lag(mid_price, 9),
+         lag10 = lag(mid_price, 10),
+         
+  ) %>%
+  slice(11:n())
+min(sec$time_diff[-1])
+
+plot(pri$timestamp, pri$time_diff)
+plot(sec$time_diff)
 t <- sec[seq(1, 200,1),]
 plot(sec$time_diff[1:20000],sec$mid_price[1:20000])
 plot(sec$time_diff[seq(1,200)])
@@ -78,3 +128,84 @@ for (i in 2:nrow(df)) {
 for (i in 2:5) {
   print(log(t$mid_price[i]) - log(t$mid_price[i-1]))
 }
+
+s1 <- sec[1:6000,]
+p1 <- pri[1:1000,]
+plot(s1$timestamp, s1$mid_price, type = "l")
+lines(p1$timestamp, p1$mid_price, col = "red")
+
+# lm(mid_price ~ timestamp + )
+# 
+# y | 
+# pm1
+# pm2
+# pm3
+
+
+# Local regression ----
+
+# Cut data
+cut_data <- function(df, start, n_width, n_future) {
+  end <- start + n_width -1
+  df_train <- df[start:end,]
+  future_points <- df[(end+1):(end+n_future), c("timestamp", "mid_price", "time_diff")]
+  future_points$timestamp <- future_points$timestamp - future_points$timestamp[1]
+  return(list(df_train, future_points))
+}
+
+fit_lm <- function(df, weights) {
+  lm_fit <- lm(mid_price ~ timestamp, data = df, weights = weights)
+  return(lm_fit)
+}
+
+# Local regression
+pipeline <- function(df, start, n_width, n_future, theta){
+  # Cut data
+  data <- cut_data(df, start, n_width, n_future)
+  data_train <- data[[1]]
+  future_data <- data[[2]]
+  # Weights
+  weights = theta^(data_train$timestamp[n_width]-data_train$timestamp)
+  # Fit model
+  lm_fit <- fit_lm(data_train, weights)
+  # Predict
+  pred <- predict(lm_fit, newdata = future_data)
+  # Get error
+  future_data$error <- future_data$mid_price - pred
+  return(list(data_train,future_data))
+}
+
+future_data_test <- pipeline(sec, 1, 100, 10, .9999)
+
+rows_short <- future_data_test[[2]]$timestamp >= 10 & future_data_test[[2]]$timestamp <= 100
+rows_long <- future_data_test[[2]]$timestamp >= 10000
+error_short <- future_data_test[[2]]$error[rows_short]
+error_long <- future_data_test[[2]]$error[rows_long]
+
+# Parameters
+start <- 1
+n_width <- 100
+n_future <- 10
+# Cut data
+data <- cut_data(sec, start, n_width, n_future)
+data_train <- data[[1]]
+future_data <- data[[2]]
+
+# Weights
+theta <- .9999
+weights <- theta^(data_train$timestamp[n_width]-data_train$timestamp)
+
+# Fit
+lm_fit <- fit_lm(data_train, weights)
+
+# Predict
+pred <- predict(lm_fit, newdata = future_data)
+
+# Get error
+future_data$error <- future_data$mid_price - pred
+
+
+plot(data_train$timestamp, data_train$mid_price, type = "l", col = "red", xlim = c(0,3e5))
+lines(future_data$timestamp, pred, col = "blue")
+lines(future_data$timestamp, future_data$mid_price, col = "green")
+
