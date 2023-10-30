@@ -145,13 +145,25 @@ lines(p1$timestamp, p1$mid_price, col = "red")
 # Local regression ----
 
 # Cut data
-cut_data <- function(df, start, n_width, n_future) {
+cut_data <- function(df, start, n_width) {
   end <- start + n_width -1
-  df_train <- df[start:end,]
+  df_cut <- df[start:end, c("timestamp", "mid_price")]
+  return(df_cut)
+}
+future_data <- function(df){
   future_points <- df[(end+1):(end+n_future), c("timestamp", "mid_price", "time_diff")]
-  future_points$timestamp <- future_points$timestamp - future_points$timestamp[1]
+  future_points$timestamp <- future_points$timestamp - df_train$timestamp[length(df_train$timestamp)]
   return(list(df_train, future_points))
 }
+
+# cut_data <- function(df, start, n_width, n_future) {
+## Legacy
+#   end <- start + n_width -1
+#   df_train <- df[start:end,]
+#   future_points <- df[(end+1):(end+n_future), c("timestamp", "mid_price", "time_diff")]
+#   future_points$timestamp <- future_points$timestamp - df_train$timestamp[length(df_train$timestamp)]
+#   return(list(df_train, future_points))
+# }
 
 fit_lm <- function(df, weights) {
   lm_fit <- lm(mid_price ~ timestamp, data = df, weights = weights)
@@ -159,28 +171,79 @@ fit_lm <- function(df, weights) {
 }
 
 # Local regression
-pipeline <- function(df, start, n_width, n_future, theta){
+pipeline <- function(df, start, n_width, n_future, theta, factor){
+  # Updated version
   # Cut data
-  data <- cut_data(df, start, n_width, n_future)
-  data_train <- data[[1]]
-  future_data <- data[[2]]
+  sec_data <- cut_data(sec, start = start, n_width = n_width)
+  sec_future <- cut_data(sec, start = (start+n_width), n_width = n_future)
+  start_time <- sec_data$timestamp[1] # First time stamp of series
+  current_time <- sec_data$timestamp[n_width] # Current time stamp
+  sec_future$timestamp <- sec_future$timestamp - current_time # Time relative to current time
+  
+  pri_rows <- which(pri$timestamp > start_time & pri$timestamp < current_time) # rows in pri within same time frame
+  pri_data <- pri[pri_rows, c("timestamp", "mid_price")]
+  data_train <- rbind(sec_data, pri_data)
   # Weights
-  weights = theta^(data_train$timestamp[n_width]-data_train$timestamp)
+  sec_weights <- theta^(sec_data$timestamp[n_width]-sec_data$timestamp)
+  pri_weights <- factor*theta^(pri_data$timestamp[length(pri_rows)]-pri_data$timestamp)
+  weights <- c(sec_weights, pri_weights)
   # Fit model
   lm_fit <- fit_lm(data_train, weights)
   # Predict
-  pred <- predict(lm_fit, newdata = future_data)
+  pred <- predict(lm_fit, newdata = sec_future)
   # Get error
-  future_data$error <- future_data$mid_price - pred
-  return(list(data_train,future_data))
+  sec_future$error <- sec_future$mid_price - pred
+  return(list(data_train,sec_future))
 }
 
-future_data_test <- pipeline(sec, 1, 100, 10, .9999)
+theta_factor_tune <- function(theta, factor) {
+  start <- 1
+  n_width <- 100
+  n_future <- 50
+  theta <- theta
+  factor <- factor
+  n <- nrow(pri)
+  runs <- n%/%(n_width+n_future)
+  time_all <- numeric(runs*n_future)
+  error_all <- numeric(runs*n_future)
+  j <- 1
+  for (i in (seq(1, n - n_width, n_width))) {
+    data_used_and_future <- pipeline(pri, start = i, n_width = n_width, n_future = n_future, theta = theta, factor = factor)
+    time_all[j:(j+n_future-1)] <- data_used_and_future[[2]]$timestamp
+    error_all[j:(j+n_future-1)] <- data_used_and_future[[2]]$error
+    j <- j + n_future
+  }
+  
+  rows_short <- which(time_all > 10 & time_all < 100)
+  rows_long <- which(time_all > 10000)
+  error_short <- error_all[rows_short]
+  error_long <- error_all[rows_long]
+  length(rows_short)
+  length(rows_long)
+  RMSE_short <- sqrt(mean(error_short^2))
+  RMSE_long <- sqrt(mean(error_long^2))
+  return(list(RMSE_short, RMSE_long))
+}
 
-rows_short <- future_data_test[[2]]$timestamp >= 10 & future_data_test[[2]]$timestamp <= 100
-rows_long <- future_data_test[[2]]$timestamp >= 10000
-error_short <- future_data_test[[2]]$error[rows_short]
-error_long <- future_data_test[[2]]$error[rows_long]
+RMSE <- theta_factor_tune(theta = .999, factor = 1)
+
+theta <- c(.9999 , .99999, .999999)
+factor <- c(1, 5, 15, 30)
+result_matrix_short <- matrix(NA, nrow = length(theta), ncol = length(factor))
+rownames(result_matrix_short) <- theta
+colnames(result_matrix_short) <- factor
+result_matrix_long <- matrix(NA, nrow = length(theta), ncol = length(factor))
+rownames(result_matrix_long) <- theta
+colnames(result_matrix_long) <- factor
+for (i in 1:length(theta)) {
+  for (j in 1:length(factor)) {
+    RMSE <- theta_factor_tune(theta[i], factor[j])
+    RMSE_short <- RMSE[[1]]
+    RMSE_long <- RMSE[[2]]
+    result_matrix_short[i,j] <- RMSE_short
+    result_matrix_long[i,j] <- RMSE_long
+  }
+}
 
 # Parameters
 start <- 1
@@ -209,3 +272,19 @@ plot(data_train$timestamp, data_train$mid_price, type = "l", col = "red", xlim =
 lines(future_data$timestamp, pred, col = "blue")
 lines(future_data$timestamp, future_data$mid_price, col = "green")
 
+# Legacy ----
+pipeline <- function(df, start, n_width, n_future, theta, factor){
+  # Cut data
+  data <- cut_data(df, start, n_width, n_future)
+  data_train <- data[[1]]
+  future_data <- data[[2]]
+  # Weights
+  weights = theta^(data_train$timestamp[n_width]-data_train$timestamp)
+  # Fit model
+  lm_fit <- fit_lm(data_train, weights)
+  # Predict
+  pred <- predict(lm_fit, newdata = future_data)
+  # Get error
+  future_data$error <- future_data$mid_price - pred
+  return(list(data_train,future_data))
+}
