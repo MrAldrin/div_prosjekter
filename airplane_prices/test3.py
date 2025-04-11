@@ -33,7 +33,7 @@ def get_prices(departure: str, destination: str, date: str, print_out=False):
     driver = webdriver.Firefox(options=options)
     driver.get(url)
 
-    sleep_time = random.uniform(a=4, b=6)
+    sleep_time = random.uniform(a=3, b=5)
     time.sleep(sleep_time)
 
     content = driver.page_source
@@ -55,7 +55,8 @@ def get_prices(departure: str, destination: str, date: str, print_out=False):
         )  # Parse the result element
 
         # Extract Price:
-        price_element = result_soup.find("div", class_="f8F1-price-text")
+        # price_element = result_soup.find("div", class_="f8F1-price-text")
+        price_element = result_soup.find(string=re.compile(r"^\d[\d\s]*kr$"))
         price = None
         if price_element:
             price_text = price_element.text.strip().replace("\xa0", "")
@@ -84,7 +85,6 @@ url = f"https://www.kayak.no/flights/{departure}-{destination}/{date}?fs=fdDir=t
 # url = f"https://www.kayak.no/flights/{departure}-{destination}/{date}?ucs=qb41ig&sort=bestflight_a"
 prices_list = []
 # %%
-url = f"https://www.kayak.no/flights/{departure}-{destination}/{date}?fs=fdDir=true;stops=~0&ucs=1a6g8dc&sort=price_a"
 
 options = Options()
 options.add_argument("--headless")
@@ -92,15 +92,19 @@ options.add_argument("--headless")
 driver = webdriver.Firefox(options=options)
 driver.get(url)
 
-sleep_time = random.uniform(a=4, b=6)
+sleep_time = random.uniform(a=3, b=5)
 time.sleep(sleep_time)
 
 content = driver.page_source
 driver.quit()
 
 soup = BeautifulSoup(content, features="html.parser")
-
-
+price_element = soup.find(string=re.compile(r"^\d[\d\s]*kr$"))
+price_element = soup.find("div", class_="hYzH-price")
+price = None
+if price_element:
+    price_text = price_element.text.strip().replace("\xa0", "")
+    price = int(re.sub(r"[^\d]+", "", price_text))
 # %%
 prices_list = []
 for p in prices:
