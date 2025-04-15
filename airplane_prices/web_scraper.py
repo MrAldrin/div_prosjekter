@@ -1,16 +1,19 @@
 # %%
 import re
-import requests
+
+# import requests
 import random
 import logging
 from bs4 import BeautifulSoup
-from dataclasses import dataclass
+
+# from dataclasses import dataclass
 from selenium import webdriver
 import time
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.firefox.options import Options
-import sys
-import pandas as pd
+
+# import sys
+# import pandas as pd
 import polars as pl
 import datetime as dt
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +25,22 @@ logging.basicConfig(
 )
 
 
+def time_it(func):
+    """Decorator to measure the execution time of a function."""
+
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logging.info(
+            f"Function '{func.__name__}' executed in {elapsed_time:.2f} seconds"
+        )
+        return result
+
+    return wrapper
+
+
 def get_prices(departure: str, arrival: str, date: str, print_out=False):
     """_summary_
 
@@ -30,7 +49,7 @@ def get_prices(departure: str, arrival: str, date: str, print_out=False):
         arrival (str): example "AMS"
         date (str): example format "2025-06-04".
     """
-    logging.info(f"Starting to scrape {departure}-{arrival} on {date}")
+    logging.info(f"Scrapeing {departure}-{arrival} on {date}")
 
     url = f"https://www.kayak.no/flights/{departure}-{arrival}/{date}?fs=fdDir=true;stops=~0&ucs=1a6g8dc&sort=price_a"
     if print_out:
@@ -44,8 +63,8 @@ def get_prices(departure: str, arrival: str, date: str, print_out=False):
     try:
         driver.get(url)
 
+        # Sleeping to wait for the page to load")
         sleep_time = 1.5
-        logging.info(f"Sleeping for {sleep_time:.2f} to wait for the page to load")
         time.sleep(sleep_time)
 
         content = driver.page_source
@@ -108,22 +127,24 @@ def get_prices(departure: str, arrival: str, date: str, print_out=False):
     return df
 
 
+def delayed_get_prices(departure, arrival, date):
+    """Wrapper function to add a random delay before calling get_prices."""
+    delay = random.uniform(0, 4.0)  # Delay between 0.5 and 2 seconds
+    logging.info(f"Delaying {delay:.2f} s for {departure}-{arrival} on {date}")
+    time.sleep(delay)
+    return get_prices(departure, arrival, date)
+
+
+@time_it
 def get_prices_wrapper(departures, arrivals, dates):
     logging.info("Starting to scrape multiple routes and dates")
-    futures = []
     with ThreadPoolExecutor() as executor:
-        for dep in departures:
-            for dest in arrivals:
-                for date in dates:
-                    # Introduce a small random delay
-                    delay = random.uniform(0, 4.0)  # Delay between 0.5 and 2 seconds
-                    logging.info(f"Delaying task submission for {delay:.2f} seconds")
-                    time.sleep(delay)
-
-                    # Submit the task
-                    futures.append(executor.submit(get_prices, dep, dest, date))
-
-        # Collect results
+        futures = [
+            executor.submit(delayed_get_prices, dep, dest, date)
+            for dep in departures
+            for dest in arrivals
+            for date in dates
+        ]
         results = [future.result() for future in futures]
     logging.info("Finished scraping all routes and dates")
     return pl.concat(results)
